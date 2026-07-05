@@ -110,7 +110,7 @@ async function libreLogin() {
   try {
     const res = await fetch(base + '/llu/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'product': 'llu.android', 'version': '4.7.0' },
+      headers: { 'Content-Type': 'application/json', 'product': 'llu.android', 'version': '4.16.0' },
       body: JSON.stringify({ email: CONFIG.LIBRE_EMAIL, password: CONFIG.LIBRE_PASSWORD }),
     });
     const data = await res.json();
@@ -136,7 +136,7 @@ async function getGlucoseReading() {
   const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.EU;
   try {
     const res = await fetch(base + '/llu/connections', {
-      headers: { 'Authorization': 'Bearer ' + state.libreToken, 'product': 'llu.android', 'version': '4.7.0' },
+      headers: { 'Authorization': 'Bearer ' + state.libreToken, 'product': 'llu.android', 'version': '4.16.0' },
     });
     const data = await res.json();
     const connection = data && data.data && data.data[0];
