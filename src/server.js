@@ -6,6 +6,7 @@ import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createHash } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -20,6 +21,7 @@ const CONFIG = {
   TWILIO_TOKEN: process.env.TWILIO_TOKEN,
   TWILIO_WHATSAPP_FROM: process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886',
   TWILIO_PHONE_FROM: process.env.TWILIO_PHONE_FROM,
+  MY_PHONE: process.env.MY_PHONE,
   VAPID_PUBLIC: process.env.VAPID_PUBLIC,
   VAPID_PRIVATE: process.env.VAPID_PRIVATE,
   VAPID_EMAIL: process.env.VAPID_EMAIL || 'mailto:you@example.com',
@@ -49,18 +51,14 @@ const LIBRE_HEADERS = {
   'Connection': 'Keep-Alive',
 };
 
-let libre = {
-  token: null,
-  expires: null,
-  accountId: null,
-  patientId: null,
-};
+let libre = { token: null, expires: null, accountId: null, accountIdHash: null };
 
 let state = {
   alarm1FiredAt: null,
   alarm2FiredAt: null,
   escalationStartedAt: null,
   responseReceived: false,
+  selfCallAnswered: false,
   timeLow: 0,
   lastGlucose: null,
   lastTrend: null,
@@ -106,7 +104,7 @@ function setupWebPush() {
       webPushReady = true;
       console.log('Web Push configured');
     } catch (e) { console.warn('VAPID error:', e.message); }
-  } else { console.warn('VAPID keys not set'); }
+  }
 }
 
 async function sendPush(title, body, data) {
@@ -121,7 +119,7 @@ async function sendPush(title, body, data) {
 
 async function libreLogin() {
   const base = LIBRE_BASE_URLS[CONFIG.LIBRE_REGION] || LIBRE_BASE_URLS.la;
-  console.log('Logging into LibreLinkUp, region:', CONFIG.LIBRE_REGION, 'base:', base);
+  console.log('Logging in, region:', CONFIG.LIBRE_REGION);
   const res = await fetch(base + '/llu/auth/login', {
     method: 'POST',
     headers: LIBRE_HEADERS,
@@ -130,26 +128,16 @@ async function libreLogin() {
   const data = await res.json();
   if (data && data.data && data.data.redirect && data.data.region) {
     CONFIG.LIBRE_REGION = data.data.region;
-    console.log('Redirected to region:', CONFIG.LIBRE_REGION);
     return libreLogin();
   }
   if (data && data.data && data.data.authTicket && data.data.authTicket.token) {
     libre.token = data.data.authTicket.token;
     libre.expires = Date.now() + (data.data.authTicket.duration * 1000);
     libre.accountId = data.data.user && data.data.user.id;
-    // account-id must be SHA256 of user id
     if (libre.accountId) {
-      const { createHash } = await import("crypto");
-      libre.accountIdHash = createHash("sha256").update(libre.accountId).digest("hex");
+      libre.accountIdHash = createHash('sha256').update(libre.accountId).digest('hex');
     }
-    // Extract jti from JWT as alternative account-id
-    try {
-      const jwt = libre.token.split('.')[1];
-      const decoded = JSON.parse(Buffer.from(jwt, 'base64').toString());
-      libre.jti = decoded.jti;
-      libre.sid = decoded.sid;
-    } catch (e) {}
-    console.log('Login successful, accountId:', libre.accountId);
+    console.log('Login successful');
     return true;
   }
   console.error('Login failed:', JSON.stringify(data));
@@ -158,31 +146,16 @@ async function libreLogin() {
 
 async function fetchConnections() {
   const base = LIBRE_BASE_URLS[CONFIG.LIBRE_REGION] || LIBRE_BASE_URLS.la;
-  // Try different account-id candidates
-  const candidates = [libre.accountIdHash, libre.accountId].filter(Boolean);
-  for (const accountId of candidates) {
-    const headers = Object.assign({}, LIBRE_HEADERS, {
-      'Authorization': 'Bearer ' + libre.token,
-      'account-id': accountId,
-    });
-    const res = await fetch(base + '/llu/connections', { headers });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch (e) {
-      console.error('Non-JSON response:', text.substring(0, 100));
-      continue;
-    }
-    if (data.message === 'AccountIdMismatch') {
-      console.log('AccountIdMismatch with:', accountId, '- trying next');
-      continue;
-    }
-    if (data.data && Array.isArray(data.data)) {
-      console.log('Connections success with account-id:', accountId);
-      return data;
-    }
-    console.log('Unexpected response with', accountId, ':', JSON.stringify(data).substring(0, 100));
+  const headers = Object.assign({}, LIBRE_HEADERS, {
+    'Authorization': 'Bearer ' + libre.token,
+    'account-id': libre.accountIdHash,
+  });
+  const res = await fetch(base + '/llu/connections', { headers });
+  const text = await res.text();
+  try { return JSON.parse(text); } catch (e) {
+    console.error('Non-JSON response:', text.substring(0, 100));
+    return null;
   }
-  return null;
 }
 
 async function getGlucoseReading() {
@@ -192,23 +165,19 @@ async function getGlucoseReading() {
   }
   try {
     const data = await fetchConnections();
-    if (!data) {
+    if (!data || !data.data || !Array.isArray(data.data)) {
       console.log('No connection data, re-logging in');
       libre.token = null;
       return null;
     }
     const connection = data.data[0];
-    if (!connection) { console.log('No connections found'); return null; }
-    
-    // Try glucoseMeasurement first, fall back to currentMeasurement
+    if (!connection) { console.log('No connections'); return null; }
     const reading = connection.glucoseMeasurement || connection.currentMeasurement;
-    if (!reading) { console.log('No reading in connection'); return null; }
-    
+    if (!reading) { console.log('No reading'); return null; }
     const trendMap = { 1: 'down', 2: 'down', 3: 'stable', 4: 'up', 5: 'up' };
     const glucose = reading.Value || reading.value;
-    const trendRaw = reading.TrendArrow || reading.trendArrow;
-    const trend = trendMap[trendRaw] || 'stable';
-    console.log('Got glucose:', glucose, 'trend:', trend);
+    const trend = trendMap[reading.TrendArrow || reading.trendArrow] || 'stable';
+    console.log('Glucose:', glucose, 'Trend:', trend);
     return { glucose, trend };
   } catch (e) {
     console.error('Error fetching glucose:', e.message);
@@ -222,6 +191,49 @@ function getTwilio() {
 }
 
 const WA_MSG = 'This is an automated message from MS: I am running low on sugar and need aid. Please call me to try and wake me up.';
+
+// ── CALL SELF FIRST ──
+// When Alarm 2 fires, call Martha's own phone with a loud alarm.
+// TwiML says "Press 1 if you are ok. If you do not respond, your contacts will be called."
+// If she presses 1 → /api/twilio/self-call-ok → cancel escalation
+// If no response → escalate to contacts after timeout
+async function callSelf(glucose) {
+  const client = getTwilio();
+  if (!client || !CONFIG.TWILIO_PHONE_FROM || !CONFIG.MY_PHONE) {
+    console.warn('Self-call not configured - missing MY_PHONE or TWILIO_PHONE_FROM');
+    return false;
+  }
+  try {
+    const serverUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+      ? 'https://' + process.env.RAILWAY_PUBLIC_DOMAIN
+      : 'https://glucosa-alert-production.up.railway.app';
+
+    const twiml = `<Response>
+      <Say voice="alice" language="es-ES">
+        Alerta de glucosa baja. Tu nivel es ${glucose} miligramos. 
+        Necesitas comer algo ahora. 
+        Pulsa el uno si estas consciente y bien.
+        Si no respondes en 30 segundos, se llamara a tus contactos de emergencia.
+      </Say>
+      <Gather numDigits="1" action="${serverUrl}/api/twilio/self-call-response" timeout="30">
+        <Say voice="alice" language="es-ES">Pulsa el uno para confirmar que estas bien.</Say>
+      </Gather>
+      <Say voice="alice" language="es-ES">No se recibio respuesta. Llamando a tus contactos de emergencia.</Say>
+      <Redirect>${serverUrl}/api/twilio/escalate-now</Redirect>
+    </Response>`;
+
+    await client.calls.create({
+      from: CONFIG.TWILIO_PHONE_FROM,
+      to: CONFIG.MY_PHONE,
+      twiml,
+    });
+    console.log('Self-call initiated to', CONFIG.MY_PHONE);
+    return true;
+  } catch (e) {
+    console.error('Self-call failed:', e.message);
+    return false;
+  }
+}
 
 async function sendWhatsAppToTop3() {
   const client = getTwilio();
@@ -247,6 +259,7 @@ async function callContact(contact, attempt) {
 
 async function runCallEscalation() {
   const contacts = state.contacts.filter(c => c.phone);
+  if (!contacts.length) { console.log('No contacts configured'); return; }
   for (const c of contacts) {
     for (let i = 1; i <= CONFIG.CALL_ATTEMPTS; i++) {
       await callContact(c, i);
@@ -275,7 +288,12 @@ async function checkGlucoseAndAlarm() {
   );
   if (shouldAlarm1) {
     state.alarm1FiredAt = Date.now();
-    await sendPush('Low glucose - eat something now', 'Glucose is ' + glucose + ' mg/dL. Drink juice or take glucose tablets.', { type: 'alarm1', glucose, trend });
+    console.log('ALARM 1 firing');
+    await sendPush(
+      'Low glucose - eat something now',
+      'Glucose is ' + glucose + ' mg/dL. Drink juice or take glucose tablets.',
+      { type: 'alarm1', glucose, trend }
+    );
     setTimeout(checkAlarm2, CONFIG.ALARM_GAP_MINS * 60 * 1000);
   }
 }
@@ -290,18 +308,38 @@ async function checkAlarm2() {
     return;
   }
   state.alarm2FiredAt = Date.now();
-  await sendPush('Glucose still low - open app now', 'Glucose is ' + glucose + ' mg/dL. Consciousness check required.', { type: 'alarm2', glucose, trend, urgent: true });
-  setTimeout(async () => {
-    if (!state.responseReceived && state.alarm2FiredAt) await triggerEscalation();
-  }, (CONFIG.WA_WINDOW_MINS + 2) * 60 * 1000);
+  state.selfCallAnswered = false;
+  console.log('ALARM 2 firing - calling self first');
+
+  // Send push notification AND call the phone simultaneously
+  await sendPush(
+    'Glucose still low - WAKE UP',
+    'Glucose is ' + glucose + ' mg/dL. Your phone is ringing — answer and press 1 if you are ok.',
+    { type: 'alarm2', glucose, trend, urgent: true }
+  );
+
+  // Call Martha's own phone
+  const selfCallOk = await callSelf(glucose);
+
+  // If self-call not configured, fall back to auto-escalate after timeout
+  if (!selfCallOk) {
+    setTimeout(async () => {
+      if (!state.responseReceived && state.alarm2FiredAt) {
+        console.log('No self-call configured, auto-escalating');
+        await triggerEscalation();
+      }
+    }, (CONFIG.WA_WINDOW_MINS + 2) * 60 * 1000);
+  }
+  // If self-call IS configured, escalation is handled by the Twilio webhook responses
 }
 
 async function triggerEscalation() {
   if (state.escalationStartedAt) return;
   state.escalationStartedAt = Date.now();
+  console.log('ESCALATION starting - sending WhatsApp then calling contacts');
   await sendWhatsAppToTop3();
   await sleep(CONFIG.WA_WINDOW_MINS * 60 * 1000);
-  if (state.responseReceived) return;
+  if (state.responseReceived) { console.log('Response received, skipping calls'); return; }
   await runCallEscalation();
 }
 
@@ -310,10 +348,13 @@ function resetAlarmState() {
   state.alarm2FiredAt = null;
   state.escalationStartedAt = null;
   state.responseReceived = false;
+  state.selfCallAnswered = false;
   state.timeLow = 0;
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── API ROUTES ──
 
 app.get('/api/health', (req, res) => res.json({
   ok: true, lastGlucose: state.lastGlucose, lastTrend: state.lastTrend,
@@ -321,6 +362,7 @@ app.get('/api/health', (req, res) => res.json({
   alarm2Active: !!state.alarm2FiredAt, escalationActive: !!state.escalationStartedAt,
   responseReceived: state.responseReceived, contactCount: state.contacts.length,
   pushSubscriptions: state.pushSubscriptions.length, region: CONFIG.LIBRE_REGION,
+  myPhoneConfigured: !!CONFIG.MY_PHONE,
 }));
 
 app.post('/api/push/subscribe', (req, res) => {
@@ -333,7 +375,36 @@ app.post('/api/push/subscribe', (req, res) => {
 });
 
 app.post('/api/alarm/conscious', (req, res) => {
+  console.log('User confirmed conscious via app');
   state.responseReceived = true; resetAlarmState(); res.json({ ok: true });
+});
+
+// Twilio webhook: called when Martha presses 1 during self-call
+app.post('/api/twilio/self-call-response', (req, res) => {
+  const digit = req.body && req.body.Digits;
+  console.log('Self-call response digit:', digit);
+  if (digit === '1') {
+    console.log('Martha confirmed conscious via phone call');
+    state.responseReceived = true;
+    state.selfCallAnswered = true;
+    resetAlarmState();
+    sendPush('You confirmed ok', 'Alarm cancelled. Stay safe!', { type: 'conscious' });
+    res.set('Content-Type', 'text/xml');
+    res.send('<Response><Say voice="alice" language="es-ES">Perfecto. Alarma cancelada. Cudate mucho.</Say></Response>');
+  } else {
+    res.set('Content-Type', 'text/xml');
+    res.send('<Response><Say voice="alice" language="es-ES">No se recibio respuesta correcta. Llamando a tus contactos.</Say></Response>');
+    // Trigger escalation
+    setTimeout(() => triggerEscalation(), 2000);
+  }
+});
+
+// Twilio webhook: called when self-call times out with no response
+app.post('/api/twilio/escalate-now', async (req, res) => {
+  console.log('Self-call timed out, escalating to contacts');
+  res.set('Content-Type', 'text/xml');
+  res.send('<Response><Say voice="alice" language="es-ES">Llamando a tus contactos de emergencia ahora.</Say></Response>');
+  if (!state.responseReceived) await triggerEscalation();
 });
 
 app.post('/api/escalate', async (req, res) => {
@@ -342,6 +413,7 @@ app.post('/api/escalate', async (req, res) => {
 });
 
 app.post('/api/twilio/reply', (req, res) => {
+  console.log('WhatsApp reply received from contact');
   state.responseReceived = true;
   sendPush('Contact replied', 'Help is on the way.', { type: 'reply' });
   res.set('Content-Type', 'text/xml').send('<Response></Response>');
