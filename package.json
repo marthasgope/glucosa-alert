@@ -9,8 +9,6 @@
     "dev": "node --watch src/server.js"
   },
   "dependencies": {
-    "@babel/runtime": "^8.0.0",
-    "@diakem/libre-link-up-api-client": "^0.7.2",
     "express": "^4.18.2",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
