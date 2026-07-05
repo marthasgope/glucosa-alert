@@ -2,10 +2,10 @@ import express from 'express';
 import webpush from 'web-push';
 import twilio from 'twilio';
 import cron from 'node-cron';
-import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { LibreLinkUpClient } from '@diakem/libre-link-up-api-client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -15,7 +15,6 @@ app.use(express.static(path.join(__dirname, '../public')));
 const CONFIG = {
   LIBRE_EMAIL: process.env.LIBRE_EMAIL,
   LIBRE_PASSWORD: process.env.LIBRE_PASSWORD,
-  LIBRE_REGION: process.env.LIBRE_REGION || 'la',
   TWILIO_SID: process.env.TWILIO_SID,
   TWILIO_TOKEN: process.env.TWILIO_TOKEN,
   TWILIO_WHATSAPP_FROM: process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886',
@@ -41,9 +40,6 @@ let state = {
   lastTrend: null,
   contacts: [],
   pushSubscriptions: [],
-  libreToken: null,
-  libreTokenExpiry: null,
-  libreAccountId: null,
 };
 
 const SETTINGS_FILE = path.join(__dirname, '../settings.json');
@@ -105,90 +101,44 @@ async function sendPushNotification(title, body, data) {
   saveSettings();
 }
 
-const LIBRE_URLS = {
-  EU: 'https://api-eu.libreview.io',
-  US: 'https://api.libreview.io',
-  la: 'https://api-la.libreview.io',
-  ap: 'https://api-ap.libreview.io',
-  au: 'https://api-au.libreview.io',
-  de: 'https://api-de.libreview.io',
-};
+// LibreLinkUp client using the npm package
+let libreClient = null;
 
-const LIBRE_HEADERS = {
-  'Content-Type': 'application/json',
-  'product': 'llu.android',
-  'version': '4.16.0',
-  'Accept-Encoding': 'gzip',
-  'Cache-Control': 'no-cache',
-  'Connection': 'Keep-Alive',
-};
-
-async function libreLogin() {
-  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.la;
-  try {
-    const res = await fetch(base + '/llu/auth/login', {
-      method: 'POST',
-      headers: LIBRE_HEADERS,
-      body: JSON.stringify({ email: CONFIG.LIBRE_EMAIL, password: CONFIG.LIBRE_PASSWORD }),
+function getLibreClient() {
+  if (!libreClient) {
+    libreClient = LibreLinkUpClient({
+      username: CONFIG.LIBRE_EMAIL,
+      password: CONFIG.LIBRE_PASSWORD,
+      clientVersion: '4.16.0',
     });
-    const data = await res.json();
-    if (data && data.data && data.data.redirect && data.data.region) {
-      CONFIG.LIBRE_REGION = data.data.region;
-      console.log('Redirected to region:', CONFIG.LIBRE_REGION);
-      return libreLogin();
-    }
-    if (data && data.data && data.data.authTicket && data.data.authTicket.token) {
-      state.libreToken = data.data.authTicket.token;
-      state.libreTokenExpiry = Date.now() + (data.data.authTicket.duration * 1000);
-      state.libreAccountId = data.data.user && data.data.user.id;
-      console.log('LibreLinkUp login successful, region:', CONFIG.LIBRE_REGION);
-      return true;
-    }
-    console.error('LibreLinkUp login failed:', JSON.stringify(data));
-    return false;
-  } catch (e) {
-    console.error('LibreLinkUp login error:', e.message);
-    return false;
   }
+  return libreClient;
 }
 
 async function getGlucoseReading() {
-  if (!state.libreToken || Date.now() > state.libreTokenExpiry) {
-    const ok = await libreLogin();
-    if (!ok) return null;
-  }
-  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.la;
   try {
-    const headers = Object.assign({}, LIBRE_HEADERS, {
-      'Authorization': 'Bearer ' + state.libreToken,
-    });
-    if (state.libreAccountId) {
-      headers['account-id'] = state.libreAccountId;
-    }
-    const res = await fetch(base + '/llu/connections', { headers });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch (e) {
-      console.error('Non-JSON response from LibreLinkUp:', text.substring(0, 200));
-      state.libreToken = null;
+    const client = getLibreClient();
+    const { read } = client;
+    const response = await read();
+    if (!response || !response.value) {
+      console.log('No glucose value in response:', JSON.stringify(response));
       return null;
     }
-    if (data.status === 911) {
-      console.log('Session expired, re-logging in');
-      state.libreToken = null;
-      return getGlucoseReading();
-    }
-    const connection = data && data.data && data.data[0];
-    if (!connection) {
-      console.log('No connection found:', JSON.stringify(data));
-      return null;
-    }
-    const reading = connection.glucoseMeasurement;
-    if (!reading) { console.log('No glucose measurement'); return null; }
-    const trendMap = { 1: 'down', 2: 'down', 3: 'stable', 4: 'up', 5: 'up' };
-    return { glucose: reading.Value, trend: trendMap[reading.TrendArrow] || 'stable' };
+    const trendMap = {
+      'NotDetermined': 'stable',
+      'SingleUp': 'up',
+      'DoubleUp': 'up',
+      'FortyFiveUp': 'up',
+      'Flat': 'stable',
+      'FortyFiveDown': 'down',
+      'SingleDown': 'down',
+      'DoubleDown': 'down',
+    };
+    const trend = trendMap[response.trend] || 'stable';
+    console.log('Got reading:', response.value, 'trend:', response.trend);
+    return { glucose: response.value, trend };
   } catch (e) {
-    console.error('Error fetching glucose:', e.message);
+    console.error('Error fetching glucose via package:', e.message);
     return null;
   }
 }
@@ -331,7 +281,6 @@ app.get('/api/health', function(req, res) {
     responseReceived: state.responseReceived,
     contactCount: state.contacts.length,
     pushSubscriptions: state.pushSubscriptions.length,
-    region: CONFIG.LIBRE_REGION,
   });
 });
 
