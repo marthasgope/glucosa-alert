@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Glucosa"/>
+  <meta name="theme-color" content="#000000"/>
+  <title>Glucosa Alert</title>
+  <link rel="apple-touch-icon" href="/icon.png"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <style>
+    :root {
+      --bg: #000;
+      --bg2: #1c1c1e;
+      --bg3: #2c2c2e;
+      --text: #fff;
+      --text2: #8e8e93;
+      --border: rgba(255,255,255,0.12);
+      --green: #30d158;
+      --yellow: #ffd60a;
+      --red: #ff453a;
+      --blue: #0a84ff;
+      --radius: 14px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f2f2f7;
+        --bg2: #fff;
+        --bg3: #e5e5ea;
+        --text: #000;
+        --text2: #6c6c70;
+        --border: rgba(0,0,0,0.1);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; max-width: 430px; margin: 0 auto; }
+    .screen { display: none; flex-direction: column; min-height: 100vh; padding: 0 0 40px; }
+    .screen.active { display: flex; }
+    .topbar { padding: 56px 20px 12px; display: flex; align-items: center; justify-content: space-between; }
+    .topbar-title { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+    .card { background: var(--bg2); border-radius: var(--radius); margin: 0 16px 12px; overflow: hidden; }
+    .card-inner { padding: 16px; }
+    .section-label { font-size: 13px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 16px; margin: 20px 0 8px; }
+    .row { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; border-bottom: 0.5px solid var(--border); }
+    .row:last-child { border-bottom: none; }
+    .row-label { font-size: 17px; }
+    .row-value { font-size: 17px; color: var(--text2); }
+    .row-action { font-size: 17px; color: var(--blue); }
+    input[type=text], input[type=number], input[type=email], input[type=tel] {
+      background: transparent; border: none; outline: none; font-size: 17px; color: var(--text); text-align: right; width: 100%; font-family: inherit;
+    }
+    input::placeholder { color: var(--text2); }
+    .btn { display: block; width: calc(100% - 32px); margin: 8px 16px; padding: 16px; font-size: 17px; font-weight: 600; border-radius: var(--radius); border: none; cursor: pointer; text-align: center; transition: opacity 0.15s; }
+    .btn:active { opacity: 0.7; }
+    .btn-green { background: var(--green); color: #000; }
+    .btn-red { background: var(--red); color: #fff; }
+    .btn-blue { background: var(--blue); color: #fff; }
+    .btn-gray { background: var(--bg3); color: var(--text); }
+    .btn-ghost { background: transparent; color: var(--text2); font-size: 15px; font-weight: 400; }
+    .glucose-hero { text-align: center; padding: 32px 16px 24px; }
+    .glucose-num { font-size: 86px; font-weight: 200; line-height: 1; letter-spacing: -4px; }
+    .glucose-unit { font-size: 17px; color: var(--text2); margin-top: 4px; }
+    .glucose-trend { font-size: 32px; margin-top: 8px; }
+    .glucose-time { font-size: 13px; color: var(--text2); margin-top: 6px; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .pill-green { background: rgba(48,209,88,0.2); color: var(--green); }
+    .pill-yellow { background: rgba(255,214,10,0.2); color: var(--yellow); }
+    .pill-red { background: rgba(255,69,58,0.2); color: var(--red); }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+    .stat { background: var(--bg2); padding: 14px 16px; }
+    .stat-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+    .stat-value { font-size: 22px; font-weight: 500; }
+    .tab-bar { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 430px; background: var(--bg2); border-top: 0.5px solid var(--border); display: flex; padding: 8px 0 24px; }
+    .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; padding: 4px 0; opacity: 0.4; transition: opacity 0.15s; }
+    .tab.active { opacity: 1; }
+    .tab-icon { font-size: 24px; }
+    .tab-label { font-size: 10px; font-weight: 500; color: var(--text); }
+    .alarm-icon-big { font-size: 72px; text-align: center; margin: 32px 0 16px; }
+    .alarm-title { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 8px; }
+    .alarm-sub { font-size: 15px; color: var(--text2); text-align: center; padding: 0 24px; line-height: 1.5; }
+    .math-display { font-size: 52px; font-weight: 200; text-align: center; margin: 24px 0; letter-spacing: -2px; }
+    .math-input-wrap { margin: 0 16px 16px; }
+    .math-input-wrap input { width: 100%; background: var(--bg2); border-radius: var(--radius); padding: 18px; font-size: 32px; font-weight: 200; color: var(--text); text-align: center; border: 2px solid var(--border); outline: none; font-family: inherit; }
+    .math-input-wrap input:focus { border-color: var(--blue); }
+    .q-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 16px 16px; }
+    .q-opt { background: var(--bg2); border: 2px solid var(--border); border-radius: var(--radius); padding: 18px 12px; font-size: 17px; text-align: center; cursor: pointer; transition: all 0.15s; color: var(--text); }
+    .q-opt:active { opacity: 0.7; }
+    .q-opt.correct { background: rgba(48,209,88,0.15); border-color: var(--green); color: var(--green); }
+    .q-opt.wrong { background: rgba(255,69,58,0.15); border-color: var(--red); color: var(--red); }
+    .countdown-big { font-size: 64px; font-weight: 200; text-align: center; color: var(--red); letter-spacing: -2px; margin: 16px 0; }
+    .countdown-label { font-size: 13px; color: var(--text2); text-align: center; margin-bottom: 8px; }
+    .phase-bar { display: flex; margin: 16px; gap: 4px; }
+    .phase-dot { flex: 1; height: 4px; border-radius: 2px; background: var(--bg3); }
+    .phase-dot.done { background: var(--green); }
+    .phase-dot.active { background: var(--yellow); }
+    .phase-dot.danger { background: var(--red); }
+    .wa-box { background: rgba(48,209,88,0.1); border: 1px solid rgba(48,209,88,0.3); border-radius: var(--radius); margin: 0 16px 12px; padding: 14px 16px; }
+    .wa-label { font-size: 12px; color: var(--green); font-weight: 600; margin-bottom: 6px; }
+    .wa-text { font-size: 15px; color: var(--text); line-height: 1.5; }
+    .contact-call-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 0.5px solid var(--border); }
+    .contact-call-row:last-child { border-bottom: none; }
+    .contact-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--blue); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; color: #fff; flex-shrink: 0; }
+    .contact-avatar.active-c { background: var(--red); }
+    .contact-avatar.done-c { background: var(--green); }
+    .log-text { font-size: 13px; color: var(--text2); padding: 4px 16px; }
+    .notify-banner { margin: 0 16px 12px; padding: 14px 16px; border-radius: var(--radius); font-size: 15px; line-height: 1.5; }
+    .notify-banner.green { background: rgba(48,209,88,0.12); color: var(--green); }
+    .notify-banner.yellow { background: rgba(255,214,10,0.12); color: var(--yellow); }
+    .notify-banner.red { background: rgba(255,69,58,0.12); color: var(--red); }
+    .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .settings-page { padding-bottom: 100px; }
+  </style>
+</head>
+<body>
+
+<!-- MONITOR -->
+<div class="screen active" id="s-monitor">
+  <div class="topbar">
+    <div class="topbar-title">Glucosa</div>
+    <div id="monitor-status-pill"><span class="pill pill-green">Active</span></div>
+  </div>
+
+  <div id="reply-banner" style="display:none;" class="notify-banner green">
+    A contact replied — help is on the way. Monitoring continues.
+  </div>
+
+  <div class="card">
+    <div class="glucose-hero">
+      <div class="glucose-num" id="g-num">--</div>
+      <div class="glucose-unit">mg/dL</div>
+      <div class="glucose-trend" id="g-trend">–</div>
+      <div class="glucose-time" id="g-time">Waiting for reading...</div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="stat-label">Time below 60</div>
+        <div class="stat-value" id="stat-timelow">0 min</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Alarm phase</div>
+        <div class="stat-value" id="stat-phase">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="push-banner" class="notify-banner yellow" style="display:none;">
+    Tap to enable notifications so alarms wake you up even when the app is closed.
+    <br/><br/>
+    <button class="btn btn-blue" style="margin:8px 0 0;width:100%;" onclick="requestPush()">Enable notifications</button>
+  </div>
+
+  <div class="section-label">Server</div>
+  <div class="card">
+    <div class="row">
+      <span class="row-label">Connection</span>
+      <span class="row-value" id="server-status">Checking...</span>
+    </div>
+    <div class="row">
+      <span class="row-label">Last poll</span>
+      <span class="row-value" id="last-poll">—</span>
+    </div>
+  </div>
+
+  <button class="btn btn-red" id="test-alarm-btn" onclick="testAlarm()" style="margin-top:8px;">Test alarm flow</button>
+</div>
+
+<!-- ALARM 1 -->
+<div class="screen" id="s-alarm1">
+  <div class="phase-bar">
+    <div class="phase-dot active"></div>
+    <div class="phase-dot"></div>
+    <div class="phase-dot"></div>
+    <div class="phase-dot"></div>
+  </div>
+  <div class="alarm-icon-big">🔔</div>
+  <div class="alarm-title" style="color:#ffd60a;">Low glucose</div>
+  <div class="alarm-sub" id="a1-reason">Eat something now</div>
+
+  <div style="height:20px;"></div>
+
+  <div class="card">
+    <div class="row">
+      <span class="row-label">Current glucose</span>
+      <span class="row-value" id="a1-glucose" style="color:var(--red);">--</span>
+    </div>
+    <div class="row">
+      <span class="row-label">Second alarm in</span>
+      <span class="row-value" style="color:var(--yellow);" id="a1-cd">15:00</span>
+    </div>
+  </div>
+
+  <div class="section-label">Update glucose after eating</div>
+  <div class="card">
+    <div class="row">
+      <span class="row-label">New reading</span>
+      <input type="number" id="a1-new-g" placeholder="mg/dL" style="text-align:right;"/>
+    </div>
+    <div class="row">
+      <span class="row-label">Trend</span>
+      <select id="a1-new-t" style="background:transparent;border:none;font-size:17px;color:var(--text2);outline:none;font-family:inherit;">
+        <option value="up">Rising ↑</option>
+        <option value="stable" selected>Stable →</option>
+        <option value="down">Falling ↓</option>
+      </select>
+    </div>
+  </div>
+  <button class="btn btn-gray" onclick="updateMidAlarm()">Update reading</button>
+  <button class="btn btn-green" onclick="alarm1Resolved()">I treated it — I am ok</button>
+  <button class="btn btn-red" onclick="skipToAlarm2()">Something is wrong</button>
+</div>
+
+<!-- ALARM 2 MATH -->
+<div class="screen" id="s-alarm2-math">
+  <div class="phase-bar">
+    <div class="phase-dot done"></div>
+    <div class="phase-dot active"></div>
+    <div class="phase-dot"></div>
+    <div class="phase-dot"></div>
+  </div>
+  <div class="alarm-icon-big">⚠️</div>
+  <div class="alarm-title" style="color:var(--red);">Consciousness check</div>
+  <div class="alarm-sub">Solve the math problem to confirm you are awake</div>
+
+  <div class="math-display" id="math-q">? × ? = ?</div>
+  <div class="math-input-wrap">
+    <input type="number" id="math-ans" placeholder="Your answer" inputmode="numeric"/>
+  </div>
+  <button class="btn btn-blue" onclick="checkMath()">Submit answer</button>
+  <div id="math-fb" style="text-align:center;padding:12px;font-size:15px;display:none;"></div>
+
+  <div class="countdown-label" style="margin-top:16px;">Auto-escalating in</div>
+  <div class="countdown-big" id="math-cd">60</div>
+
+  <button class="btn btn-ghost" onclick="confirmConscious()" style="margin-top:8px;">I am conscious and ok — cancel</button>
+  <button class="btn btn-red" onclick="goEscalate()">Call for help now</button>
+</div>
+
+<!-- ALARM 2 QUESTION -->
+<div class="screen" id="s-alarm2-q">
+  <div class="phase-bar">
+    <div class="phase-dot done"></div>
+    <div class="phase-dot active"></div>
+    <div class="phase-dot"></div>
+    <div class="phase-dot"></div>
+  </div>
+  <div class="alarm-icon-big">🧠</div>
+  <div class="alarm-title" style="color:var(--red);">One more question</div>
+  <div class="alarm-sub" id="q-text" style="margin-bottom:24px;">?</div>
+
+  <div class="q-opts" id="q-opts"></div>
+  <div id="q-fb" style="text-align:center;padding:12px;font-size:15px;display:none;"></div>
+
+  <div class="countdown-label" style="margin-top:8px;">Auto-escalating in</div>
+  <div class="countdown-big" id="q-cd">60</div>
+
+  <button class="btn btn-ghost" onclick="confirmConscious()" style="margin-top:8px;">I am conscious and ok — cancel</button>
+  <button class="btn btn-red" onclick="goEscalate()">Call for help now</button>
+</div>
+
+<!-- ESCALATION -->
+<div class="screen" id="s-escalation">
+  <div class="phase-bar">
+    <div class="phase-dot done"></div>
+    <div class="phase-dot done"></div>
+    <div class="phase-dot" id="pi-msg"></div>
+    <div class="phase-dot" id="pi-call"></div>
+  </div>
+
+  <div style="height:8px;"></div>
+  <div class="alarm-title" style="color:var(--red);margin-bottom:8px;">Calling for help</div>
+
+  <div class="wa-box">
+    <div class="wa-label">WhatsApp sent to top 3 contacts</div>
+    <div class="wa-text" id="esc-wa-msg"></div>
+  </div>
+
+  <div id="esc-response-window" class="card" style="margin-bottom:12px;">
+    <div class="card-inner" style="text-align:center;">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:8px;">Waiting for reply</div>
+      <div style="font-size:48px;font-weight:200;color:var(--yellow);" id="esc-cd">5:00</div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px;">Calls begin if no response</div>
+      <button class="btn btn-gray" style="margin:12px 0 0;width:100%;" onclick="simReply()">Simulate: contact replied</button>
+    </div>
+  </div>
+
+  <div class="card" id="esc-call-card" style="display:none;">
+    <div class="card-inner">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:8px;font-weight:600;">VOICE CALLS</div>
+    </div>
+    <div id="esc-call-rows"></div>
+    <div id="esc-call-log" style="padding:8px 0;"></div>
+  </div>
+
+  <button class="btn btn-ghost" onclick="confirmConscious()" style="margin-top:8px;">I am ok — cancel alert</button>
+</div>
+
+<!-- SETTINGS -->
+<div class="screen settings-page" id="s-settings">
+  <div class="topbar">
+    <div class="topbar-title">Settings</div>
+  </div>
+
+  <div class="section-label">Thresholds</div>
+  <div class="card">
+    <div class="row">
+      <span class="row-label">Alarm below (mg/dL)</span>
+      <input type="number" id="cfg-thresh" value="60"/>
+    </div>
+    <div class="row">
+      <span class="row-label">After (minutes)</span>
+      <input type="number" id="cfg-dur" value="30"/>
+    </div>
+    <div class="row">
+      <span class="row-label">Also alarm if falling fast</span>
+      <select id="cfg-trend" style="background:transparent;border:none;font-size:17px;color:var(--text2);outline:none;font-family:inherit;">
+        <option value="yes" selected>Yes</option>
+        <option value="no">No</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section-label">Alarm gap</div>
+  <div class="card">
+    <div class="row">
+      <span class="row-label">Minutes between alarms</span>
+      <input type="number" id="cfg-gap" value="15"/>
+    </div>
+  </div>
+
+  <div class="section-label">Escalation</div>
+  <div class="card">
+    <div class="row">
+      <span class="row-label">WhatsApp wait (minutes)</span>
+      <input type="number" id="cfg-wa" value="5"/>
+    </div>
+    <div class="row">
+      <span class="row-label">Call attempts per contact</span>
+      <input type="number" id="cfg-attempts" value="2"/>
+    </div>
+  </div>
+
+  <div class="section-label">Emergency contacts</div>
+  <div class="card" id="contacts-list"></div>
+  <button class="btn btn-gray" onclick="addContact()" style="margin-top:4px;">+ Add contact</button>
+
+  <button class="btn btn-green" onclick="saveSettings()" style="margin-top:16px;">Save settings</button>
+</div>
+
+<!-- TAB BAR -->
+<div class="tab-bar">
+  <div class="tab active" id="tab-monitor" onclick="showTab('monitor')">
+    <div class="tab-icon">💉</div>
+    <div class="tab-label">Monitor</div>
+  </div>
+  <div class="tab" id="tab-settings" onclick="showTab('settings')">
+    <div class="tab-icon">⚙️</div>
+    <div class="tab-label">Settings</div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
