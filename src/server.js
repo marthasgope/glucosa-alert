@@ -104,8 +104,7 @@ async function sendPushNotification(title, body, data) {
   saveSettings();
 }
 
-const LIBRE_URLS = { EU: 'https://api-eu.libreview.io', US: 'https://api.libreview.io' };
-
+const LIBRE_URLS = { EU: 'https://api-eu.libreview.io', US: 'https://api.libreview.io', la: 'https://api-la.libreview.io' };
 async function libreLogin() {
   const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.EU;
   try {
