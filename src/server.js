@@ -137,6 +137,11 @@ async function libreLogin() {
     libre.token = data.data.authTicket.token;
     libre.expires = Date.now() + (data.data.authTicket.duration * 1000);
     libre.accountId = data.data.user && data.data.user.id;
+    // account-id must be SHA256 of user id
+    if (libre.accountId) {
+      const { createHash } = await import("crypto");
+      libre.accountIdHash = createHash("sha256").update(libre.accountId).digest("hex");
+    }
     // Extract jti from JWT as alternative account-id
     try {
       const jwt = libre.token.split('.')[1];
@@ -154,7 +159,7 @@ async function libreLogin() {
 async function fetchConnections() {
   const base = LIBRE_BASE_URLS[CONFIG.LIBRE_REGION] || LIBRE_BASE_URLS.la;
   // Try different account-id candidates
-  const candidates = [libre.accountId, libre.jti, libre.sid].filter(Boolean);
+  const candidates = [libre.accountIdHash, libre.accountId].filter(Boolean);
   for (const accountId of candidates) {
     const headers = Object.assign({}, LIBRE_HEADERS, {
       'Authorization': 'Bearer ' + libre.token,
