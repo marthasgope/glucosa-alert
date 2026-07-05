@@ -15,7 +15,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 const CONFIG = {
   LIBRE_EMAIL: process.env.LIBRE_EMAIL,
   LIBRE_PASSWORD: process.env.LIBRE_PASSWORD,
-  LIBRE_REGION: process.env.LIBRE_REGION || 'EU',
+  LIBRE_REGION: process.env.LIBRE_REGION || 'la',
   TWILIO_SID: process.env.TWILIO_SID,
   TWILIO_TOKEN: process.env.TWILIO_TOKEN,
   TWILIO_WHATSAPP_FROM: process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886',
@@ -43,6 +43,7 @@ let state = {
   pushSubscriptions: [],
   libreToken: null,
   libreTokenExpiry: null,
+  libreAccountId: null,
 };
 
 const SETTINGS_FILE = path.join(__dirname, '../settings.json');
@@ -104,23 +105,46 @@ async function sendPushNotification(title, body, data) {
   saveSettings();
 }
 
-const LIBRE_URLS = { EU: 'https://api-eu.libreview.io', US: 'https://api.libreview.io', la: 'https://api-la.libreview.io' };
+const LIBRE_URLS = {
+  EU: 'https://api-eu.libreview.io',
+  US: 'https://api.libreview.io',
+  la: 'https://api-la.libreview.io',
+  ap: 'https://api-ap.libreview.io',
+  au: 'https://api-au.libreview.io',
+  de: 'https://api-de.libreview.io',
+};
+
+const LIBRE_HEADERS = {
+  'Content-Type': 'application/json',
+  'product': 'llu.android',
+  'version': '4.16.0',
+  'Accept-Encoding': 'gzip',
+  'Cache-Control': 'no-cache',
+  'Connection': 'Keep-Alive',
+};
+
 async function libreLogin() {
-  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.EU;
+  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.la;
   try {
     const res = await fetch(base + '/llu/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'product': 'llu.android', 'version': '4.16.0' },
+      headers: LIBRE_HEADERS,
       body: JSON.stringify({ email: CONFIG.LIBRE_EMAIL, password: CONFIG.LIBRE_PASSWORD }),
     });
     const data = await res.json();
+    if (data && data.data && data.data.redirect && data.data.region) {
+      CONFIG.LIBRE_REGION = data.data.region;
+      console.log('Redirected to region:', CONFIG.LIBRE_REGION);
+      return libreLogin();
+    }
     if (data && data.data && data.data.authTicket && data.data.authTicket.token) {
       state.libreToken = data.data.authTicket.token;
       state.libreTokenExpiry = Date.now() + (data.data.authTicket.duration * 1000);
-      console.log('LibreLinkUp login successful');
+      state.libreAccountId = data.data.user && data.data.user.id;
+      console.log('LibreLinkUp login successful, region:', CONFIG.LIBRE_REGION);
       return true;
     }
-    console.error('LibreLinkUp login failed');
+    console.error('LibreLinkUp login failed:', JSON.stringify(data));
     return false;
   } catch (e) {
     console.error('LibreLinkUp login error:', e.message);
@@ -133,15 +157,34 @@ async function getGlucoseReading() {
     const ok = await libreLogin();
     if (!ok) return null;
   }
-  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.EU;
+  const base = LIBRE_URLS[CONFIG.LIBRE_REGION] || LIBRE_URLS.la;
   try {
-    const res = await fetch(base + '/llu/connections', {
-      headers: { 'Authorization': 'Bearer ' + state.libreToken, 'product': 'llu.android', 'version': '4.16.0' },
+    const headers = Object.assign({}, LIBRE_HEADERS, {
+      'Authorization': 'Bearer ' + state.libreToken,
     });
-    const data = await res.json();
+    if (state.libreAccountId) {
+      headers['account-id'] = state.libreAccountId;
+    }
+    const res = await fetch(base + '/llu/connections', { headers });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch (e) {
+      console.error('Non-JSON response from LibreLinkUp:', text.substring(0, 200));
+      state.libreToken = null;
+      return null;
+    }
+    if (data.status === 911) {
+      console.log('Session expired, re-logging in');
+      state.libreToken = null;
+      return getGlucoseReading();
+    }
     const connection = data && data.data && data.data[0];
-    if (!connection) return null;
+    if (!connection) {
+      console.log('No connection found:', JSON.stringify(data));
+      return null;
+    }
     const reading = connection.glucoseMeasurement;
+    if (!reading) { console.log('No glucose measurement'); return null; }
     const trendMap = { 1: 'down', 2: 'down', 3: 'stable', 4: 'up', 5: 'up' };
     return { glucose: reading.Value, trend: trendMap[reading.TrendArrow] || 'stable' };
   } catch (e) {
@@ -180,7 +223,7 @@ async function callContact(contact, attempt) {
   if (!client || !CONFIG.TWILIO_PHONE_FROM) return false;
   try {
     const twiml = '<Response><Say voice="alice" language="es-ES">Hola. Mensaje automatico. La persona tiene el azucar muy baja y puede estar inconsciente. Por favor llamala inmediatamente.</Say></Response>';
-    await client.calls.create({ from: CONFIG.TWILIO_PHONE_FROM, to: contact.phone, twiml: twiml });
+    await client.calls.create({ from: CONFIG.TWILIO_PHONE_FROM, to: contact.phone, twiml });
     console.log('Called ' + contact.name + ' attempt ' + attempt);
     return true;
   } catch (e) {
@@ -223,7 +266,7 @@ async function checkGlucoseAndAlarm() {
     await sendPushNotification(
       'Low glucose - eat something now',
       'Glucose is ' + glucose + ' mg/dL. Drink juice or take glucose tablets.',
-      { type: 'alarm1', glucose: glucose, trend: trend }
+      { type: 'alarm1', glucose, trend }
     );
     setTimeout(checkAlarm2, CONFIG.ALARM_GAP_MINS * 60 * 1000);
   }
@@ -244,7 +287,7 @@ async function checkAlarm2() {
   await sendPushNotification(
     'Glucose still low - open app now',
     'Glucose is ' + glucose + ' mg/dL. Consciousness check required.',
-    { type: 'alarm2', glucose: glucose, trend: trend, urgent: true }
+    { type: 'alarm2', glucose, trend, urgent: true }
   );
   setTimeout(async function() {
     if (!state.responseReceived && state.alarm2FiredAt) {
@@ -288,6 +331,7 @@ app.get('/api/health', function(req, res) {
     responseReceived: state.responseReceived,
     contactCount: state.contacts.length,
     pushSubscriptions: state.pushSubscriptions.length,
+    region: CONFIG.LIBRE_REGION,
   });
 });
 
